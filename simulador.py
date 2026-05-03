@@ -1,8 +1,11 @@
 import streamlit as st
 from datetime import datetime
-import pdfkit
-import base64
 from pathlib import Path
+import base64
+
+# PDF
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+from reportlab.lib.styles import getSampleStyleSheet
 
 st.set_page_config(page_title="Diagnóstico Tributário Inteligente")
 
@@ -42,7 +45,7 @@ credito_aproveitado = min(icms_debito, icms_credito)
 saldo_credito = max(icms_credito - icms_debito, 0)
 icms_a_pagar = max(icms_debito - icms_credito, 0)
 
-# ================= SIMPLES CORRETO =================
+# ================= SIMPLES =================
 rbt12 = faturamento_total * 12
 
 if atividade == "Serviço":
@@ -119,91 +122,42 @@ st.write(f"Real: R$ {imposto_lr:,.2f}")
 st.success(f"Melhor regime: {melhor}")
 st.write(f"Economia: R$ {economia:,.2f}")
 
-# ================= LOGO =================
-def carregar_logo():
-    if Path("logo.png").exists():
-        with open("logo.png", "rb") as f:
-            return base64.b64encode(f.read()).decode()
-    return ""
-
 # ================= PDF =================
 def gerar_pdf():
-    logo = carregar_logo()
 
-    html = f"""
-    <html><head><meta charset="UTF-8"></head>
-    <body style="font-family: Arial; padding: 30px; font-size: 14px;">
+    doc = SimpleDocTemplate("relatorio.pdf")
+    styles = getSampleStyleSheet()
+    elementos = []
 
-    {"<img src='data:image/png;base64,"+logo+"' width='120'><br><br>" if logo else ""}
+    elementos.append(Paragraph("Diagnóstico Tributário", styles["Title"]))
+    elementos.append(Spacer(1, 12))
 
-    <h2>Diagnóstico Tributário</h2>
+    elementos.append(Paragraph(f"Cliente: {nome_cliente}", styles["Normal"]))
+    elementos.append(Paragraph(f"Faturamento: R$ {faturamento_total:,.2f}", styles["Normal"]))
+    elementos.append(Paragraph(f"Data: {datetime.now().strftime('%d/%m/%Y')}", styles["Normal"]))
+    elementos.append(Spacer(1, 12))
 
-    <p><b>Cliente:</b> {nome_cliente}</p>
-    <p><b>Faturamento:</b> R$ {faturamento_total:,.2f}</p>
-    <p><b>Data:</b> {datetime.now().strftime('%d/%m/%Y')}</p>
+    elementos.append(Paragraph("ICMS", styles["Heading2"]))
+    elementos.append(Paragraph(f"Débito: R$ {icms_debito:,.2f}", styles["Normal"]))
+    elementos.append(Paragraph(f"Crédito: R$ {icms_credito:,.2f}", styles["Normal"]))
+    elementos.append(Paragraph(f"A pagar: R$ {icms_a_pagar:,.2f}", styles["Normal"]))
+    elementos.append(Spacer(1, 12))
 
-    <hr>
+    elementos.append(Paragraph("Comparativo Tributário", styles["Heading2"]))
+    elementos.append(Paragraph(f"Simples: R$ {imposto_simples:,.2f}", styles["Normal"]))
+    elementos.append(Paragraph(f"Presumido: R$ {imposto_lp:,.2f}", styles["Normal"]))
+    elementos.append(Paragraph(f"Real: R$ {imposto_lr:,.2f}", styles["Normal"]))
+    elementos.append(Spacer(1, 12))
 
-    <h3>ICMS</h3>
-    Débito: R$ {icms_debito:,.2f}<br>
-    Crédito: R$ {icms_credito:,.2f}<br>
-    Crédito Aproveitado: R$ {credito_aproveitado:,.2f}<br>
-    Saldo Crédito: R$ {saldo_credito:,.2f}<br>
-    A pagar: R$ {icms_a_pagar:,.2f}<br>
+    elementos.append(Paragraph("Conclusão", styles["Heading2"]))
+    elementos.append(Paragraph(f"Melhor regime: {melhor}", styles["Normal"]))
+    elementos.append(Paragraph(f"Economia: R$ {economia:,.2f}", styles["Normal"]))
 
-    <hr>
-
-    <h3>Comparativo</h3>
-    Simples: R$ {imposto_simples:,.2f}<br>
-    Presumido: R$ {imposto_lp:,.2f}<br>
-    Real: R$ {imposto_lr:,.2f}<br>
-
-    <hr>
-
-    <h3>Detalhamento - Simples</h3>
-    Base: R$ {faturamento_total:,.2f}<br>
-    Alíquota efetiva: {aliquota_efetiva*100:.2f}%<br>
-    DAS: R$ {imposto_simples:,.2f}<br>
-
-    <hr>
-
-    <h3>Detalhamento - Presumido</h3>
-    ICMS: R$ {icms_a_pagar:,.2f}<br>
-    PIS: R$ {pis:,.2f}<br>
-    COFINS: R$ {cofins:,.2f}<br>
-    IRPJ: R$ {irpj:,.2f}<br>
-    CSLL: R$ {csll:,.2f}<br>
-    INSS: R$ {inss_patronal:,.2f}<br>
-
-    <hr>
-
-    <h3>Detalhamento - Real</h3>
-    ICMS: R$ {icms_a_pagar:,.2f}<br>
-    PIS: R$ {pis_lr:,.2f}<br>
-    COFINS: R$ {cofins_lr:,.2f}<br>
-    IRPJ: R$ {irpj_lr:,.2f}<br>
-    CSLL: R$ {csll_lr:,.2f}<br>
-
-    <hr>
-
-    <h3>Conclusão</h3>
-    Melhor regime: <b>{melhor}</b><br>
-    Economia: <b>R$ {economia:,.2f}</b>
-
-    <br><br>
-
-    Wagner de Jesus Ribeiro
-    </body></html>
-    """
-
-    config = pdfkit.configuration(
-        wkhtmltopdf=r"C:\Program Files\wkhtmltopdf\bin\wkhtmltopdf.exe"
-    )
-
-    pdfkit.from_string(html, "relatorio.pdf", configuration=config)
+    doc.build(elementos)
 
     with open("relatorio.pdf", "rb") as f:
-        st.download_button("Baixar PDF", f, "relatorio.pdf")
+        st.download_button("📄 Baixar PDF", f, "relatorio.pdf")
 
+# ================= BOTÃO =================
 if st.button("Gerar PDF"):
     gerar_pdf()
