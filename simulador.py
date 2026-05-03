@@ -1,114 +1,103 @@
 import streamlit as st
-import gspread
-from google.oauth2.service_account import Credentials
 from datetime import datetime
+import pdfkit
+import base64
+from pathlib import Path
 
-# PDF
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
-from reportlab.lib.styles import getSampleStyleSheet
+st.set_page_config(page_title="Diagnóstico Tributário Inteligente")
 
-st.set_page_config(page_title="Diagnóstico Tributário Inteligente", layout="centered")
+# ================= CABEÇALHO =================
+col1, col2 = st.columns([1, 5])
 
-st.title("💼 Diagnóstico Tributário Inteligente")
-st.write("Simples Nacional x Lucro Presumido x Lucro Real")
-st.markdown("📞 Contato: 38 98808 9755")
+with col1:
+    if Path("logo.png").exists():
+        st.image("logo.png", width=80)
+
+with col2:
+    st.markdown("## Diagnóstico Tributário Inteligente")
+    st.markdown("📞 Contato: 38 98808 9755")
+
 st.markdown("---")
 
-# ----------------------------
-# CONEXÃO GOOGLE SHEETS
-# ----------------------------
-def conectar_planilha():
-    try:
-        scope = ["https://www.googleapis.com/auth/spreadsheets"]
-
-        creds_dict = dict(st.secrets["gcp_service_account"])
-        creds = Credentials.from_service_account_info(creds_dict, scopes=scope)
-
-        client = gspread.authorize(creds)
-
-        sheet = client.open_by_url(
-            "https://docs.google.com/spreadsheets/d/1sQQVdXBJkIioUrryurAmjEb3TA3CYoP5KigmUcoX0PI/edit?pli=1&gid=0#gid=0"
-        ).sheet1
-
-        return sheet
-
-    except Exception as e:
-        st.error("Erro ao conectar com Google Sheets")
-        st.write(e)
-        return None
-
-sheet = conectar_planilha()
-
-# ----------------------------
-# ENTRADAS
-# ----------------------------
-st.subheader("📥 Dados da Empresa")
-
+# ================= ENTRADAS =================
 nome_cliente = st.text_input("Nome do cliente")
 
-faturamento_total = st.number_input("Faturamento total (R$)", min_value=0.0, value=0.0)
+faturamento_total = st.number_input("Faturamento total", min_value=0.0)
+faturamento_tributado = st.number_input("Faturamento tributado", min_value=0.0)
+faturamento_st = st.number_input("Faturamento ST", min_value=0.0)
 
-st.subheader("📤 Saídas")
+icms_credito = st.number_input("Crédito ICMS", min_value=0.0)
 
-faturamento_tributado = st.number_input("Faturamento tributado (R$)", min_value=0.0, value=0.0)
-faturamento_st = st.number_input("Faturamento com ST (R$)", min_value=0.0, value=0.0)
+folha = st.number_input("Folha", min_value=0.0)
+margem = st.number_input("Margem (%)", value=20.0) / 100
 
-st.subheader("📥 Entradas")
+atividade = st.selectbox("Atividade", ["Serviço", "Comércio", "Indústria"])
 
-icms_entrada = st.number_input("Crédito ICMS (R$)", min_value=0.0, value=0.0)
+if faturamento_total == 0:
+    st.stop()
 
-folha = st.number_input("Folha de pagamento (R$)", min_value=0.0, value=0.0)
-margem = st.number_input("Margem de lucro (%)", value=20.0) / 100
+# ================= ICMS =================
+icms_debito = faturamento_tributado * 0.18
+credito_aproveitado = min(icms_debito, icms_credito)
+saldo_credito = max(icms_credito - icms_debito, 0)
+icms_a_pagar = max(icms_debito - icms_credito, 0)
 
-atividade = st.selectbox("Tipo de atividade", ["Serviço", "Comércio", "Indústria"])
+# ================= SIMPLES CORRETO =================
+rbt12 = faturamento_total * 12
 
-# ----------------------------
-# CÁLCULOS
-# ----------------------------
-
-# Simples
-imposto_simples = faturamento_total * 0.06
-
-# ICMS
-aliquota_icms = 0.18
-icms_saida = faturamento_tributado * aliquota_icms
-icms_a_pagar = max(icms_saida - icms_entrada, 0)
-
-# Presumido
 if atividade == "Serviço":
-    presuncao = 0.32
-    iss = faturamento_total * 0.05
+    if rbt12 <= 180000:
+        aliquota = 0.06; deducao = 0
+    elif rbt12 <= 360000:
+        aliquota = 0.112; deducao = 9360
+    elif rbt12 <= 720000:
+        aliquota = 0.135; deducao = 17640
+    elif rbt12 <= 1800000:
+        aliquota = 0.16; deducao = 35640
+    elif rbt12 <= 3600000:
+        aliquota = 0.21; deducao = 125640
+    else:
+        aliquota = 0.33; deducao = 648000
 else:
-    presuncao = 0.08
-    iss = 0
+    if rbt12 <= 180000:
+        aliquota = 0.04; deducao = 0
+    elif rbt12 <= 360000:
+        aliquota = 0.073; deducao = 5940
+    elif rbt12 <= 720000:
+        aliquota = 0.095; deducao = 13860
+    elif rbt12 <= 1800000:
+        aliquota = 0.107; deducao = 22500
+    elif rbt12 <= 3600000:
+        aliquota = 0.143; deducao = 87300
+    else:
+        aliquota = 0.19; deducao = 378000
 
+aliquota_efetiva = ((rbt12 * aliquota) - deducao) / rbt12
+imposto_simples = faturamento_total * aliquota_efetiva
+
+# ================= PRESUMIDO =================
+presuncao = 0.32 if atividade == "Serviço" else 0.08
 base = faturamento_total * presuncao
 
-imposto_lp = (
-    base * 0.15 +
-    base * 0.09 +
-    faturamento_total * 0.0065 +
-    faturamento_total * 0.03 +
-    icms_a_pagar +
-    iss
-)
+pis = faturamento_total * 0.0065
+cofins = faturamento_total * 0.03
+irpj = base * 0.15
+csll = base * 0.09
+inss_patronal = folha * 0.20
 
-# Lucro Real
+imposto_lp = pis + cofins + irpj + csll + icms_a_pagar + inss_patronal
+
+# ================= REAL =================
 lucro = faturamento_total * margem
 
+pis_lr = faturamento_total * 0.0165
+cofins_lr = faturamento_total * 0.076
 irpj_lr = lucro * 0.15
-if lucro > 20000:
-    irpj_lr += (lucro - 20000) * 0.10
+csll_lr = lucro * 0.09
 
-imposto_lr = (
-    irpj_lr +
-    lucro * 0.09 +
-    faturamento_total * 0.0165 +
-    faturamento_total * 0.076 +
-    icms_a_pagar
-)
+imposto_lr = pis_lr + cofins_lr + irpj_lr + csll_lr + icms_a_pagar
 
-# Melhor
+# ================= COMPARAÇÃO =================
 menor = min(imposto_simples, imposto_lp, imposto_lr)
 
 if menor == imposto_simples:
@@ -120,84 +109,101 @@ else:
 
 economia = max(imposto_simples, imposto_lp, imposto_lr) - menor
 
-# ----------------------------
-# RESULTADO
-# ----------------------------
-st.subheader("📊 Resultado")
+# ================= RESULTADO =================
+st.subheader("Resultado")
 
 st.write(f"Simples: R$ {imposto_simples:,.2f}")
 st.write(f"Presumido: R$ {imposto_lp:,.2f}")
-st.write(f"Lucro Real: R$ {imposto_lr:,.2f}")
+st.write(f"Real: R$ {imposto_lr:,.2f}")
 
-st.success(f"💡 Melhor regime: {melhor}")
-st.write(f"💰 Economia: R$ {economia:,.2f}")
+st.success(f"Melhor regime: {melhor}")
+st.write(f"Economia: R$ {economia:,.2f}")
 
-st.subheader("📊 ICMS")
-st.write(f"Débito ICMS: R$ {icms_saida:,.2f}")
-st.write(f"Crédito ICMS: R$ {icms_entrada:,.2f}")
-st.write(f"ICMS a pagar: R$ {icms_a_pagar:,.2f}")
+# ================= LOGO =================
+def carregar_logo():
+    if Path("logo.png").exists():
+        with open("logo.png", "rb") as f:
+            return base64.b64encode(f.read()).decode()
+    return ""
 
-# ----------------------------
-# PDF
-# ----------------------------
+# ================= PDF =================
 def gerar_pdf():
-    doc = SimpleDocTemplate("relatorio_tributario.pdf")
-    styles = getSampleStyleSheet()
-    elementos = []
+    logo = carregar_logo()
 
-    elementos.append(Paragraph("Diagnóstico Tributário", styles["Title"]))
-    elementos.append(Spacer(1, 12))
+    html = f"""
+    <html><head><meta charset="UTF-8"></head>
+    <body style="font-family: Arial; padding: 30px; font-size: 14px;">
 
-    elementos.append(Paragraph(f"Cliente: {nome_cliente}", styles["Normal"]))
-    elementos.append(Paragraph(f"Faturamento: R$ {faturamento_total:,.2f}", styles["Normal"]))
-    elementos.append(Spacer(1, 12))
+    {"<img src='data:image/png;base64,"+logo+"' width='120'><br><br>" if logo else ""}
 
-    elementos.append(Paragraph("ICMS", styles["Heading2"]))
-    elementos.append(Paragraph(f"Débito: R$ {icms_saida:,.2f}", styles["Normal"]))
-    elementos.append(Paragraph(f"Crédito: R$ {icms_entrada:,.2f}", styles["Normal"]))
-    elementos.append(Paragraph(f"A pagar: R$ {icms_a_pagar:,.2f}", styles["Normal"]))
-    elementos.append(Spacer(1, 12))
+    <h2>Diagnóstico Tributário</h2>
 
-    elementos.append(Paragraph("Comparativo", styles["Heading2"]))
-    elementos.append(Paragraph(f"Simples: R$ {imposto_simples:,.2f}", styles["Normal"]))
-    elementos.append(Paragraph(f"Presumido: R$ {imposto_lp:,.2f}", styles["Normal"]))
-    elementos.append(Paragraph(f"Real: R$ {imposto_lr:,.2f}", styles["Normal"]))
-    elementos.append(Spacer(1, 12))
+    <p><b>Cliente:</b> {nome_cliente}</p>
+    <p><b>Faturamento:</b> R$ {faturamento_total:,.2f}</p>
+    <p><b>Data:</b> {datetime.now().strftime('%d/%m/%Y')}</p>
 
-    elementos.append(Paragraph(f"Melhor regime: {melhor}", styles["Normal"]))
-    elementos.append(Paragraph(f"Economia: R$ {economia:,.2f}", styles["Normal"]))
+    <hr>
 
-    doc.build(elementos)
+    <h3>ICMS</h3>
+    Débito: R$ {icms_debito:,.2f}<br>
+    Crédito: R$ {icms_credito:,.2f}<br>
+    Crédito Aproveitado: R$ {credito_aproveitado:,.2f}<br>
+    Saldo Crédito: R$ {saldo_credito:,.2f}<br>
+    A pagar: R$ {icms_a_pagar:,.2f}<br>
 
-# 👉 POSIÇÃO CORRETA DO BOTÃO PDF
-if st.button("📄 Gerar Relatório em PDF"):
+    <hr>
+
+    <h3>Comparativo</h3>
+    Simples: R$ {imposto_simples:,.2f}<br>
+    Presumido: R$ {imposto_lp:,.2f}<br>
+    Real: R$ {imposto_lr:,.2f}<br>
+
+    <hr>
+
+    <h3>Detalhamento - Simples</h3>
+    Base: R$ {faturamento_total:,.2f}<br>
+    Alíquota efetiva: {aliquota_efetiva*100:.2f}%<br>
+    DAS: R$ {imposto_simples:,.2f}<br>
+
+    <hr>
+
+    <h3>Detalhamento - Presumido</h3>
+    ICMS: R$ {icms_a_pagar:,.2f}<br>
+    PIS: R$ {pis:,.2f}<br>
+    COFINS: R$ {cofins:,.2f}<br>
+    IRPJ: R$ {irpj:,.2f}<br>
+    CSLL: R$ {csll:,.2f}<br>
+    INSS: R$ {inss_patronal:,.2f}<br>
+
+    <hr>
+
+    <h3>Detalhamento - Real</h3>
+    ICMS: R$ {icms_a_pagar:,.2f}<br>
+    PIS: R$ {pis_lr:,.2f}<br>
+    COFINS: R$ {cofins_lr:,.2f}<br>
+    IRPJ: R$ {irpj_lr:,.2f}<br>
+    CSLL: R$ {csll_lr:,.2f}<br>
+
+    <hr>
+
+    <h3>Conclusão</h3>
+    Melhor regime: <b>{melhor}</b><br>
+    Economia: <b>R$ {economia:,.2f}</b>
+
+    <br><br>
+
+    Wagner de Jesus Ribeiro
+    </body></html>
+    """
+
+    config = pdfkit.configuration(
+        wkhtmltopdf=r"C:\Program Files\wkhtmltopdf\bin\wkhtmltopdf.exe"
+    )
+
+    pdfkit.from_string(html, "relatorio.pdf", configuration=config)
+
+    with open("relatorio.pdf", "rb") as f:
+        st.download_button("Baixar PDF", f, "relatorio.pdf")
+
+if st.button("Gerar PDF"):
     gerar_pdf()
-    with open("relatorio_tributario.pdf", "rb") as file:
-        st.download_button(
-            "⬇️ Baixar PDF",
-            data=file,
-            file_name="relatorio_tributario.pdf"
-        )
-
-# ----------------------------
-# SALVAR
-# ----------------------------
-if st.button("💾 Salvar análise"):
-    if sheet:
-        try:
-            sheet.append_row([
-                nome_cliente,
-                faturamento_total,
-                faturamento_tributado,
-                faturamento_st,
-                icms_entrada,
-                imposto_simples,
-                imposto_lp,
-                imposto_lr,
-                melhor,
-                economia,
-                datetime.now().strftime("%d/%m/%Y %H:%M")
-            ])
-            st.success("Salvo com sucesso!")
-        except Exception as e:
-            st.error(e)
