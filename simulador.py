@@ -1,117 +1,88 @@
 import streamlit as st
-from reportlab.lib.pagesizes import letter
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
-from reportlab.lib.styles import getSampleStyleSheet
-import os
+import gspread
+from google.oauth2.service_account import Credentials
+from datetime import datetime
 
 st.set_page_config(page_title="Diagnóstico Tributário Inteligente", layout="centered")
-
+st.text_input("38 98808 9755")
 st.title("💼 Diagnóstico Tributário Inteligente")
-st.write("Consultoria Contábil Estratégica")
+st.write("Simples Nacional x Lucro Presumido x Lucro Real")
+
+# ----------------------------
+# CONEXÃO GOOGLE SHEETS
+# ----------------------------
+def conectar_planilha():
+    try:
+        scope = ["https://www.googleapis.com/auth/spreadsheets"]
+
+        creds_dict = dict(st.secrets["gcp_service_account"])
+
+        creds = Credentials.from_service_account_info(creds_dict, scopes=scope)
+        client = gspread.authorize(creds)
+
+        # 🔥 USE SEU LINK AQUI
+        sheet = client.open_by_url("https://docs.google.com/spreadsheets/d/1sQQVdXBJkIioUrryurAmjEb3TA3CYoP5KigmUcoX0PI/edit?pli=1&gid=0#gid=0").sheet1
+
+        return sheet
+
+    except Exception as e:
+        st.error("Erro ao conectar com Google Sheets")
+        st.write(e)
+        return None
+
+sheet = conectar_planilha()
 
 # ----------------------------
 # ENTRADA DE DADOS
 # ----------------------------
-faturamento_mensal = st.number_input("Faturamento mensal (R$)", min_value=0.0, value=10000.0)
-folha = st.number_input("Folha de pagamento mensal (R$)", min_value=0.0, value=3000.0)
-margem_lucro = st.number_input("Margem de lucro (%)", min_value=0.0, value=20.0) / 100
+nome_cliente = st.text_input("Nome do cliente")
+
+faturamento = st.number_input("Faturamento mensal (R$)", min_value=0.0, value=10000.0)
+folha = st.number_input("Folha de pagamento (R$)", min_value=0.0, value=3000.0)
+margem = st.number_input("Margem de lucro (%)", value=20.0) / 100
 
 atividade = st.selectbox("Tipo de atividade", ["Serviço", "Comércio", "Indústria"])
 
-rbt12 = faturamento_mensal * 12
-fator_r = folha / faturamento_mensal if faturamento_mensal > 0 else 0
-
 # ----------------------------
-# TABELAS SIMPLES
+# CÁLCULOS
 # ----------------------------
-def tabela_anexo_I(rbt12):
-    if rbt12 <= 180000: return 0.04, 0
-    elif rbt12 <= 360000: return 0.073, 5940
-    elif rbt12 <= 720000: return 0.095, 13860
-    elif rbt12 <= 1800000: return 0.107, 22500
-    elif rbt12 <= 3600000: return 0.143, 87300
-    else: return 0.19, 378000
+rbt12 = faturamento * 12
+fator_r = folha / faturamento if faturamento > 0 else 0
 
-def tabela_anexo_II(rbt12):
-    if rbt12 <= 180000: return 0.045, 0
-    elif rbt12 <= 360000: return 0.078, 5940
-    elif rbt12 <= 720000: return 0.10, 13860
-    elif rbt12 <= 1800000: return 0.112, 22500
-    elif rbt12 <= 3600000: return 0.147, 85500
-    else: return 0.30, 720000
+# Simples (simplificado)
+imposto_simples = faturamento * 0.06
 
-def tabela_anexo_III(rbt12):
-    if rbt12 <= 180000: return 0.06, 0
-    elif rbt12 <= 360000: return 0.112, 9360
-    elif rbt12 <= 720000: return 0.135, 17640
-    elif rbt12 <= 1800000: return 0.16, 35640
-    elif rbt12 <= 3600000: return 0.21, 125640
-    else: return 0.33, 648000
-
-def tabela_anexo_V(rbt12):
-    if rbt12 <= 180000: return 0.155, 0
-    elif rbt12 <= 360000: return 0.18, 4500
-    elif rbt12 <= 720000: return 0.195, 9900
-    elif rbt12 <= 1800000: return 0.205, 17100
-    elif rbt12 <= 3600000: return 0.23, 62100
-    else: return 0.305, 540000
-
-# ----------------------------
-# SIMPLES
-# ----------------------------
-if atividade == "Serviço":
-    if fator_r >= 0.28:
-        anexo = "Anexo III"
-        aliquota, deducao = tabela_anexo_III(rbt12)
-    else:
-        anexo = "Anexo V"
-        aliquota, deducao = tabela_anexo_V(rbt12)
-elif atividade == "Comércio":
-    anexo = "Anexo I"
-    aliquota, deducao = tabela_anexo_I(rbt12)
-else:
-    anexo = "Anexo II"
-    aliquota, deducao = tabela_anexo_II(rbt12)
-
-aliquota_efetiva = ((rbt12 * aliquota) - deducao) / rbt12
-imposto_simples = faturamento_mensal * aliquota_efetiva
-
-# ----------------------------
-# LUCRO PRESUMIDO
-# ----------------------------
+# Lucro Presumido
 if atividade == "Serviço":
     presuncao = 0.32
-    iss = faturamento_mensal * 0.05
+    iss = faturamento * 0.05
 else:
     presuncao = 0.08
     iss = 0
 
-base = faturamento_mensal * presuncao
-imposto_lp = base*0.15 + base*0.09 + faturamento_mensal*0.0065 + faturamento_mensal*0.03 + iss
+base = faturamento * presuncao
 
-# ----------------------------
-# LUCRO REAL
-# ----------------------------
-lucro = faturamento_mensal * margem_lucro
+imposto_lp = (
+    base * 0.15 +
+    base * 0.09 +
+    faturamento * 0.0065 +
+    faturamento * 0.03 +
+    iss
+)
+
+# Lucro Real
+lucro = faturamento * margem
 
 irpj_lr = lucro * 0.15
 if lucro > 20000:
     irpj_lr += (lucro - 20000) * 0.10
 
-imposto_lr = irpj_lr + (lucro*0.09) + (faturamento_mensal*0.0165) + (faturamento_mensal*0.076)
-
-# ----------------------------
-# RESULTADO
-# ----------------------------
-st.subheader("Resultado")
-
-st.write(f"Fator R: {fator_r:.2%}")
-st.write(f"Anexo: {anexo}")
-st.write(f"Alíquota efetiva: {aliquota_efetiva:.2%}")
-
-st.write(f"Simples: R$ {imposto_simples:,.2f}")
-st.write(f"Presumido: R$ {imposto_lp:,.2f}")
-st.write(f"Lucro Real: R$ {imposto_lr:,.2f}")
+imposto_lr = (
+    irpj_lr +
+    lucro * 0.09 +
+    faturamento * 0.0165 +
+    faturamento * 0.076
+)
 
 # Melhor opção
 menor = min(imposto_simples, imposto_lp, imposto_lr)
@@ -123,35 +94,37 @@ elif menor == imposto_lp:
 else:
     melhor = "Lucro Real"
 
-st.success(f"Melhor opção: {melhor}")
+# ----------------------------
+# RESULTADO
+# ----------------------------
+st.subheader("Resultado")
+
+st.write(f"Fator R: {fator_r:.2%}")
+st.write(f"Simples: R$ {imposto_simples:,.2f}")
+st.write(f"Presumido: R$ {imposto_lp:,.2f}")
+st.write(f"Lucro Real: R$ {imposto_lr:,.2f}")
+
+st.success(f"Melhor regime: {melhor}")
 
 # ----------------------------
-# GERAR PDF
+# SALVAR DADOS
 # ----------------------------
-def gerar_pdf():
-    doc = SimpleDocTemplate("relatorio_tributario.pdf", pagesize=letter)
-    styles = getSampleStyleSheet()
-    elementos = []
-
-    elementos.append(Paragraph("Diagnóstico Tributário", styles["Title"]))
-    elementos.append(Spacer(1, 12))
-
-    elementos.append(Paragraph(f"Faturamento: R$ {faturamento_mensal:,.2f}", styles["Normal"]))
-    elementos.append(Paragraph(f"Atividade: {atividade}", styles["Normal"]))
-    elementos.append(Paragraph(f"Fator R: {fator_r:.2%}", styles["Normal"]))
-    elementos.append(Spacer(1, 12))
-
-    elementos.append(Paragraph(f"Simples Nacional: R$ {imposto_simples:,.2f}", styles["Normal"]))
-    elementos.append(Paragraph(f"Lucro Presumido: R$ {imposto_lp:,.2f}", styles["Normal"]))
-    elementos.append(Paragraph(f"Lucro Real: R$ {imposto_lr:,.2f}", styles["Normal"]))
-    elementos.append(Spacer(1, 12))
-
-    elementos.append(Paragraph(f"Melhor opção: {melhor}", styles["Normal"]))
-
-    doc.build(elementos)
-
-# Botão
-if st.button("📄 Gerar Relatório em PDF"):
-    gerar_pdf()
-    with open("relatorio_tributario.pdf", "rb") as file:
-        st.download_button("⬇️ Baixar PDF", file, file_name="relatorio_tributario.pdf")
+if st.button("💾 Salvar análise"):
+    if sheet:
+        try:
+            sheet.append_row([
+                nome_cliente,
+                atividade,
+                faturamento,
+                imposto_simples,
+                imposto_lp,
+                imposto_lr,
+                melhor,
+                datetime.now().strftime("%d/%m/%Y %H:%M")
+            ])
+            st.success("Cliente salvo com sucesso!")
+        except Exception as e:
+            st.error("Erro ao salvar na planilha")
+            st.write(e)
+    else:
+        st.warning("Planilha não conectada")
